@@ -3,6 +3,7 @@ Audio transcription module using faster-whisper with loguru logging
 """
 
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -18,25 +19,37 @@ DEFAULT_CONFIG = {
     "compute_type": "int8",
     "beam_size": 5,
     "language": "ru",
-    "log_rotation": "10 MB",
     "log_level": "INFO",
-    "log_format": "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+    "console_format": "<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}",
     "segment_log_interval": 10,  # Log every N segments
     "memory_log_interval": 100,  # Log memory usage every N segments
     "line_break_interval": 5,  # Add line break after N sentences
     "max_preview_chars": 50,  # Maximum characters to show in preview logs
+    "show_progress": True,  # Whether to show progress bar
+    "print_transcript": False,  # Whether to print transcript to console
 }
 
-# Configure logger
-logger.remove()
-log_file_path = os.path.join(os.path.dirname(__file__), "transcription.log")
-logger.add(
-    log_file_path,
-    rotation=DEFAULT_CONFIG["log_rotation"],
-    level=DEFAULT_CONFIG["log_level"],
-    format=DEFAULT_CONFIG["log_format"],
-)
-logger.add(lambda msg: tqdm.write(msg, end=""), level="INFO", format="{message}")
+
+# Set up console-only logger
+def setup_logger(config):
+    """Set up the logger with the provided configuration"""
+    logger.remove()
+    logger.add(
+        sys.stdout,
+        level=config["log_level"],
+        format=config["console_format"],
+        colorize=True,
+        filter=lambda record: "Segment"
+        not in record["message"],  # Filter out segment logs
+    )
+    # Add separate logger for segment details
+    logger.add(
+        sys.stderr,
+        level="DEBUG",
+        format="<dim>{time:HH:mm:ss}</dim> | <level>{level: <8}</level> | {message}",
+        colorize=True,
+        filter=lambda record: "Segment" in record["message"],  # Only segment logs
+    )
 
 
 def transcribe_audio(
@@ -61,17 +74,23 @@ def transcribe_audio(
         beam_size (int, optional): Beam size for decoding. Defaults to config value.
         device (str, optional): Device to run model on. Defaults to config value.
         compute_type (str, optional): Computation type. Defaults to config value.
-        **kwargs: Additional keyword arguments to pass to model.transcribe()
+        **kwargs: Additional keyword arguments for configuration
 
     Returns:
         str: Path to the output file
     """
+    # Get configuration from kwargs or use defaults
+    config = DEFAULT_CONFIG.copy()
+    for key in config:
+        if key in kwargs:
+            config[key] = kwargs[key]
+
     # Use defaults if not provided
-    model_size = model_size or DEFAULT_CONFIG["model_size"]
-    language = language or DEFAULT_CONFIG["language"]
-    beam_size = beam_size or DEFAULT_CONFIG["beam_size"]
-    device = device or DEFAULT_CONFIG["device"]
-    compute_type = compute_type or DEFAULT_CONFIG["compute_type"]
+    model_size = model_size or config["model_size"]
+    language = language or config["language"]
+    beam_size = beam_size or config["beam_size"]
+    device = device or config["device"]
+    compute_type = compute_type or config["compute_type"]
 
     # Set default output path if not provided
     if output_path is None:
@@ -82,6 +101,9 @@ def transcribe_audio(
     output_dir = os.path.dirname(output_path)
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
+
+    # Setup logger with current config
+    setup_logger(config)
 
     # Start timing the transcription process
     start_time = time.time()
@@ -94,20 +116,19 @@ def transcribe_audio(
     audio_file = Path(audio_path)
     if audio_file.exists():
         file_size = audio_file.stat().st_size / (1024 * 1024)  # Size in MB
-        logger.info(f"Audio file: {audio_path}")
-        logger.info(f"File size: {file_size:.2f} MB")
+        logger.info(f"Audio file: {audio_file.name} ({file_size:.2f} MB)")
     else:
         logger.error(f"Audio file not found: {audio_path}")
         raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
-    logger.info(f"Output file: {output_path}")
-    logger.info(f"Model: {model_size} with {compute_type} quantization on {device}")
+    logger.info(f"Output will be saved to: {output_path}")
+    logger.info(f"Model: {model_size} ({compute_type}) on {device}")
 
     # Create output file and write header
-    logger.info("Creating output file with headers...")
+    logger.info("Creating output file...")
     with open(output_path, "w") as md_file:
         md_file.write("# Transcription Results\n\n")
-        md_file.write(f"## Audio File: {os.path.basename(audio_path)}\n\n")
+        md_file.write(f"## Audio File: {audio_file.name}\n\n")
         md_file.write(f"## Model: {model_size}\n\n")
         md_file.write(f"## Language: {language}\n\n")
         md_file.write("## Transcription:\n\n")
@@ -116,7 +137,7 @@ def transcribe_audio(
     logger.info("Starting transcription process...")
     try:
         segments, info = model.transcribe(
-            audio_path, beam_size=beam_size, language=language, **kwargs
+            audio_path, beam_size=beam_size, language=language
         )
     except Exception as e:
         logger.error(f"Error during transcription: {e}")
@@ -124,7 +145,7 @@ def transcribe_audio(
 
     # Log audio detection info
     logger.info(
-        f"Detected language: {info.language} with probability {info.language_probability:.2f}"
+        f"Detected language: {info.language} (confidence: {info.language_probability:.2f})"
     )
 
     # Process and save each segment on the fly with progress bar
@@ -132,17 +153,21 @@ def transcribe_audio(
         segment_count = 0
         total_chars = 0
 
-        segment_log_interval = kwargs.get(
-            "segment_log_interval", DEFAULT_CONFIG["segment_log_interval"]
-        )
-        line_break_interval = kwargs.get(
-            "line_break_interval", DEFAULT_CONFIG["line_break_interval"]
-        )
-        max_preview_chars = kwargs.get(
-            "max_preview_chars", DEFAULT_CONFIG["max_preview_chars"]
-        )
+        # Use a cleaner tqdm configuration
+        progress_args = {
+            "desc": "Transcribing",
+            "unit": " segment",
+            "position": 0,
+            "leave": True,
+            "dynamic_ncols": True,
+            "bar_format": "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
+        }
 
-        with tqdm(desc="Transcribing", unit=" segment", position=0, leave=True) as pbar:
+        with (
+            tqdm(**progress_args)
+            if config["show_progress"]
+            else tqdm(total=0, disable=True) as pbar
+        ):
             for i, segment in enumerate(segments):
                 segment_count += 1
                 segment_text = segment.text.strip()
@@ -153,47 +178,48 @@ def transcribe_audio(
                 elapsed_time = time.time() - start_time
                 char_rate = total_chars / elapsed_time if elapsed_time > 0 else 0
 
-                # Log every N segments to avoid spamming the log
-                if i % segment_log_interval == 0:
-                    preview = segment_text[:max_preview_chars]
-                    if len(segment_text) > max_preview_chars:
+                # Log every N segments
+                if i % config["segment_log_interval"] == 0:
+                    preview = segment_text[: config["max_preview_chars"]]
+                    if len(segment_text) > config["max_preview_chars"]:
                         preview += "..."
-                    logger.info(f"Processing segment {segment_count}: '{preview}'")
                     logger.info(
-                        f"Speed: {char_rate:.1f} chars/sec | Segments processed: {segment_count}"
+                        f"Segment {segment_count}: '{preview}' | Speed: {char_rate:.1f} chars/sec"
                     )
 
-                # Print to console for immediate feedback
-                print(segment_text)
+                # Print to console for immediate feedback (optional)
+                if config["print_transcript"] and not config["show_progress"]:
+                    print(f"({segment_count:03d}) {segment_text}")
 
                 # Write to markdown file immediately
                 md_file.write(f" {segment_text}\n")
 
                 # Add a line break in markdown for readability
-                if i % line_break_interval == line_break_interval - 1:
+                if (
+                    i % config["line_break_interval"]
+                    == config["line_break_interval"] - 1
+                ):
                     md_file.write("\n")
 
-                # Update progress bar with additional info
-                pbar.update(1)
-                pbar.set_description(
-                    f"Segment {segment_count} | Speed: {char_rate:.1f} chars/sec"
-                )
+                # Update progress bar
+                if config["show_progress"]:
+                    pbar.update(1)
+                    pbar.set_postfix(
+                        {"speed": f"{char_rate:.1f} c/s", "seg": segment_count}
+                    )
 
                 # Memory awareness: log every N segments
-                memory_log_interval = kwargs.get(
-                    "memory_log_interval", DEFAULT_CONFIG["memory_log_interval"]
-                )
-                if segment_count % memory_log_interval == 0:
+                if segment_count % config["memory_log_interval"] == 0:
                     memory_usage = psutil.virtual_memory().used / (
                         1024 * 1024 * 1024
                     )  # GB
                     logger.info(
-                        f"Memory usage: {memory_usage:.2f} GB | Segments processed: {segment_count}"
+                        f"Memory: {memory_usage:.2f} GB | Segments: {segment_count}"
                     )
 
     # Calculate and log final statistics
     elapsed_time = time.time() - start_time
-    logger.info(f"Transcription complete!")
+    logger.info("Transcription completed!")
     logger.info(
         f"Processed {segment_count} segments with {total_chars} total characters"
     )
@@ -201,39 +227,13 @@ def transcribe_audio(
     logger.info(
         f"Average speed: {total_chars / elapsed_time:.1f} characters per second"
     )
-    logger.info(f"Results saved to {output_path}")
+    logger.info(f"Results saved to: {output_path}")
+
+    # Print final message
+    if config["show_progress"]:
+        print(f"\n✅ Transcription complete! Results saved to: {output_path}")
 
     return output_path
-
-
-def configure_logger(**kwargs):
-    """
-    Configure the logger with custom settings
-
-    Args:
-        **kwargs: Logger configuration options
-    """
-    logger.remove()
-
-    # Update configuration with provided kwargs
-    config = DEFAULT_CONFIG.copy()
-    config.update(kwargs)
-
-    log_file_path = kwargs.get(
-        "log_file_path", os.path.join(os.path.dirname(__file__), "transcription.log")
-    )
-
-    logger.add(
-        log_file_path,
-        rotation=config.get("log_rotation", DEFAULT_CONFIG["log_rotation"]),
-        level=config.get("log_level", DEFAULT_CONFIG["log_level"]),
-        format=config.get("log_format", DEFAULT_CONFIG["log_format"]),
-    )
-    logger.add(
-        lambda msg: tqdm.write(msg, end=""),
-        level=config.get("log_level", DEFAULT_CONFIG["log_level"]),
-        format=config.get("console_format", "{message}"),
-    )
 
 
 # Running this script directly will use command line arguments or defaults
@@ -274,11 +274,24 @@ if __name__ == "__main__":
         default=DEFAULT_CONFIG["compute_type"],
         help=f"Computation type (default: {DEFAULT_CONFIG['compute_type']})",
     )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable progress bar",
+    )
+    parser.add_argument(
+        "--print-transcript",
+        action="store_true",
+        help="Print transcript to console instead of progress bar",
+    )
 
     args = parser.parse_args()
 
-    # Configure logger if needed
-    # configure_logger(log_level="DEBUG")  # Example
+    # Set up logging options based on command line arguments
+    kwargs = {
+        "show_progress": not args.no_progress,
+        "print_transcript": args.print_transcript or args.no_progress,
+    }
 
     transcribe_audio(
         audio_path=args.audio_path,
@@ -288,4 +301,5 @@ if __name__ == "__main__":
         beam_size=args.beam_size,
         device=args.device,
         compute_type=args.compute_type,
+        **kwargs,
     )

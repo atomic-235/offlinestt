@@ -1,6 +1,7 @@
 import os
 
 from faster_whisper import WhisperModel
+from tqdm import tqdm
 
 model_size = "base"  # Using smaller base model for faster processing
 
@@ -20,31 +21,23 @@ with open(output_path, "w") as md_file:
 print("Starting transcription...")
 segments, info = model.transcribe(audio_path, beam_size=5, language="ru")
 
-print(
-    "Detected language '%s' with probability %f"
-    % (info.language, info.language_probability)
-)
 
-# Write language info to file
+# Process and save each segment on the fly with progress bar
 with open(output_path, "a") as md_file:
-    md_file.write(
-        f"**Detected Language:** {info.language} (probability: {info.language_probability:.2f})\n\n"
-    )
-    md_file.write("---\n\n")
+    with tqdm(desc="Transcribing", unit=" segment") as pbar:
+        for i, segment in enumerate(segments):
+            # Print to console
+            print(segment.text)
 
-# Process and save each segment on the fly
-with open(output_path, "a") as md_file:
-    for i, segment in enumerate(segments):
-        # Print to console
-        print("[%.2fs -> %.2fs] %s" % (segment.start, segment.end, segment.text))
+            # Write to markdown file immediately
+            md_file.write(f" {segment.text}\n")
 
-        # Write to markdown file immediately
-        md_file.write(
-            f"{i + 1}. [{segment.start:.2f}s -> {segment.end:.2f}s] {segment.text}\n"
-        )
+            # Add a line break in markdown for readability
+            if i % 5 == 4:  # Every 5 sentences, add an extra break
+                md_file.write("\n")
 
-        # Add a line break in markdown for readability
-        if i % 5 == 4:  # Every 5 sentences, add an extra break
-            md_file.write("\n")
+            # Update progress bar
+            pbar.update(1)
+            pbar.set_description(f"Segment {i + 1}")
 
 print(f"Transcription complete! Results saved to {output_path}")

@@ -109,23 +109,31 @@ def transcribe_audio(
     start_time = time.time()
 
     # Initialize the model
-    logger.info(f"Initializing Whisper model: {model_size}")
+    logger.opt(colors=True).info(
+        f"Initializing <green>Whisper</green> model: <cyan>{model_size}</cyan>"
+    )
     model = WhisperModel(model_size, device=device, compute_type=compute_type)
 
     # Log audio file info
     audio_file = Path(audio_path)
     if audio_file.exists():
         file_size = audio_file.stat().st_size / (1024 * 1024)  # Size in MB
-        logger.info(f"Audio file: {audio_file.name} ({file_size:.2f} MB)")
+    if audio_file.exists():
+        file_size = audio_file.stat().st_size / (1024 * 1024)  # Size in MB
+        logger.opt(colors=True).info(
+            f"Audio file: <blue>{audio_file.name}</blue> ({file_size:.2f} MB)"
+        )
     else:
-        logger.error(f"Audio file not found: {audio_path}")
+        logger.opt(colors=True).error(f"Audio file <red>not found</red>: {audio_path}")
         raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
-    logger.info(f"Output will be saved to: {output_path}")
-    logger.info(f"Model: {model_size} ({compute_type}) on {device}")
+    logger.opt(colors=True).info(f"Output will be saved to: <blue>{output_path}</blue>")
+    logger.opt(colors=True).info(
+        f"Model: <cyan>{model_size}</cyan> ({compute_type}) on <yellow>{device}</yellow>"
+    )
 
     # Create output file and write header
-    logger.info("Creating output file...")
+    logger.opt(colors=True).info("<green>Creating</green> output file...")
     with open(output_path, "w") as md_file:
         md_file.write("# Transcription Results\n\n")
         md_file.write(f"## Audio File: {audio_file.name}\n\n")
@@ -134,18 +142,18 @@ def transcribe_audio(
         md_file.write("## Transcription:\n\n")
 
     # Start transcription
-    logger.info("Starting transcription process...")
+    logger.opt(colors=True).info("<green>Starting</green> transcription process...")
     try:
         segments, info = model.transcribe(
             audio_path, beam_size=beam_size, language=language
         )
     except Exception as e:
-        logger.error(f"Error during transcription: {e}")
+        logger.opt(colors=True).error(f"Error during transcription: <red>{e}</red>")
         raise
 
     # Log audio detection info
-    logger.info(
-        f"Detected language: {info.language} (confidence: {info.language_probability:.2f})"
+    logger.opt(colors=True).info(
+        f"Detected language: <green>{info.language}</green> (confidence: {info.language_probability:.2f})"
     )
 
     # Process and save each segment on the fly with progress bar
@@ -183,8 +191,8 @@ def transcribe_audio(
                     preview = segment_text[: config["max_preview_chars"]]
                     if len(segment_text) > config["max_preview_chars"]:
                         preview += "..."
-                    logger.info(
-                        f"Segment {segment_count}: '{preview}' | Speed: {char_rate:.1f} chars/sec"
+                    logger.opt(colors=True).info(
+                        f"Segment <blue>{segment_count}</blue>: '<yellow>{preview}</yellow>' | Speed: {char_rate:.1f} chars/sec"
                     )
 
                 # Print to console for immediate feedback (optional)
@@ -213,21 +221,21 @@ def transcribe_audio(
                     memory_usage = psutil.virtual_memory().used / (
                         1024 * 1024 * 1024
                     )  # GB
-                    logger.info(
-                        f"Memory: {memory_usage:.2f} GB | Segments: {segment_count}"
+                    logger.opt(colors=True).info(
+                        f"Memory: <magenta>{memory_usage:.2f} GB</magenta> | Segments: <blue>{segment_count}</blue>"
                     )
 
     # Calculate and log final statistics
     elapsed_time = time.time() - start_time
-    logger.info("Transcription completed!")
-    logger.info(
-        f"Processed {segment_count} segments with {total_chars} total characters"
+    logger.opt(colors=True).info("<green>✅ Transcription completed!</green>")
+    logger.opt(colors=True).info(
+        f"Processed <blue>{segment_count}</blue> segments with <yellow>{total_chars}</yellow> total characters"
     )
-    logger.info(f"Total time: {elapsed_time:.2f} seconds")
-    logger.info(
-        f"Average speed: {total_chars / elapsed_time:.1f} characters per second"
+    logger.opt(colors=True).info(f"Total time: <cyan>{elapsed_time:.2f}</cyan> seconds")
+    logger.opt(colors=True).info(
+        f"Average speed: <cyan>{total_chars / elapsed_time:.1f}</cyan> characters per second"
     )
-    logger.info(f"Results saved to: {output_path}")
+    logger.opt(colors=True).info(f"Results saved to: <blue>{output_path}</blue>")
 
     # Print final message
     if config["show_progress"]:

@@ -11,7 +11,7 @@ TRANSCRIPTS_DIR="$HOME/projects/notes/private/transcripts/raw"
 TRANSCRIBE_SCRIPT="transcribe.py"  # Assumes script is in the same directory
 
 # Get current date and time for the output filename
-current_datetime=$(date +"%Y-%m-%d_%H-%M-%S")
+current_datetime=$(date +"%Y-%m-%d_%H-%M")
 
 # Check if recordings directory exists
 if [ ! -d "$RECORDINGS_DIR" ]; then

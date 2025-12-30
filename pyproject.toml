@@ -9,4 +9,5 @@ dependencies = [
     "tqdm>=4.67.1",
     "loguru>=0.7.2",
     "psutil>=6.1.0",
+    "textual>=0.89.1",
 ]

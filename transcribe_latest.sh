@@ -59,18 +59,10 @@ mkdir -p "$TRANSCRIPTS_DIR"
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-# Prefer repo virtualenv python if available
-PYTHON_BIN="python"
-if [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
-    PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
-elif [ -x "$SCRIPT_DIR/.venv/bin/python3" ]; then
-    PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python3"
-fi
-
 # Run transcription with the necessary environment variable and parameters
 echo "Starting transcription..."
 export OMP_NUM_THREADS=10
-"$PYTHON_BIN" "$SCRIPT_DIR/$TRANSCRIBE_SCRIPT" "$output_wav" \
+uv run --project "$SCRIPT_DIR" python "$SCRIPT_DIR/$TRANSCRIBE_SCRIPT" "$output_wav" \
     -o "$TRANSCRIPTS_DIR/${current_datetime}.md" \
     -m "${MODEL_SIZE:-small}" \
     -l "${LANGUAGE:-ru}"

@@ -2,6 +2,7 @@
 """TUI for recording and transcribing audio using Textual with animations."""
 
 import asyncio
+import json
 import os
 import signal
 import subprocess
@@ -9,7 +10,8 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field, asdict
+from typing import Any
 
 from textual import on, work
 from textual.app import App, ComposeResult
@@ -31,6 +33,60 @@ from textual.widgets import (
     Select,
     Static,
 )
+
+
+CONFIG_DIR = Path.home() / ".config" / "offlinestt"
+CONFIG_FILE = CONFIG_DIR / "offlinestt.json"
+
+
+@dataclass
+class Settings:
+    """Application settings that persist to disk."""
+
+    recordings_dir: str = ""
+    transcripts_dir: str = ""
+    model_size: str = "medium"
+    language: str = "ru"
+    device: str = "cpu"
+    theme: str = "textual-dark"
+    max_seconds: int = 3000
+
+    def __post_init__(self):
+        # Set defaults for paths if not provided
+        if not self.recordings_dir:
+            self.recordings_dir = str(Path.home() / "recordings")
+        if not self.transcripts_dir:
+            self.transcripts_dir = str(
+                Path.home() / "projects/personal/notes/private/transcripts/raw"
+            )
+
+    @classmethod
+    def load(cls) -> "Settings":
+        """Load settings from config file, or return defaults."""
+        if CONFIG_FILE.exists():
+            try:
+                with open(CONFIG_FILE) as f:
+                    data = json.load(f)
+                return cls(
+                    **{k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+                )
+            except (json.JSONDecodeError, TypeError) as e:
+                # Invalid config, return defaults
+                pass
+        return cls()
+
+    def save(self) -> None:
+        """Save settings to config file."""
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(asdict(self), f, indent=2)
+
+    def update(self, **kwargs) -> None:
+        """Update settings and save."""
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+        self.save()
 
 
 class PulsingDot(Static):
@@ -314,7 +370,7 @@ class TranscriptionProgress(Static):
             pass
 
 
-class PathSelector(Static):
+class PathSelector(Static, can_focus=True):
     """A clickable path display with edit capability."""
 
     DEFAULT_CSS = """
@@ -330,6 +386,11 @@ class PathSelector(Static):
         border: solid $primary;
     }
     
+    PathSelector:focus {
+        background: $surface-lighten-1;
+        border: double $primary;
+    }
+    
     PathSelector .path-label {
         color: $text-muted;
     }
@@ -338,6 +399,11 @@ class PathSelector(Static):
         color: $text;
     }
     """
+
+    BINDINGS = [
+        Binding("enter", "select", "Select", show=False),
+        Binding("space", "select", "Select", show=False),
+    ]
 
     path = reactive("", init=False)
 
@@ -358,15 +424,18 @@ class PathSelector(Static):
             display_path = path
             if len(path) > 60:
                 display_path = "..." + path[-57:]
-            value_widget.update(f"[cyan]{display_path}[/] [dim](click to change)[/]")
+            value_widget.update(f"[cyan]{display_path}[/] [dim](enter to change)[/]")
         except NoMatches:
             pass
 
     def on_click(self) -> None:
+        self.action_select()
+
+    def action_select(self) -> None:
         self.app.push_screen(DirectoryPickerScreen(self.selector_id, Path(self.path)))
 
 
-class FileSelector(Static):
+class FileSelector(Static, can_focus=True):
     """Shows selected file with option to pick a different one."""
 
     DEFAULT_CSS = """
@@ -381,7 +450,17 @@ class FileSelector(Static):
         background: $surface-lighten-1;
         border: solid $primary;
     }
+    
+    FileSelector:focus {
+        background: $surface-lighten-1;
+        border: double $primary;
+    }
     """
+
+    BINDINGS = [
+        Binding("enter", "select", "Select", show=False),
+        Binding("space", "select", "Select", show=False),
+    ]
 
     file_path = reactive("")
 
@@ -397,15 +476,18 @@ class FileSelector(Static):
             value_widget = self.query_one("#file-value", Static)
             if path:
                 name = Path(path).name
-                value_widget.update(f"[green]{name}[/] [dim](click to change)[/]")
+                value_widget.update(f"[green]{name}[/] [dim](enter to change)[/]")
             else:
                 value_widget.update(
-                    "[dim]No file selected (click to browse, or record new)[/]"
+                    "[dim]No file selected (enter to browse, or record new)[/]"
                 )
         except NoMatches:
             pass
 
     def on_click(self) -> None:
+        self.action_select()
+
+    def action_select(self) -> None:
         self.app.push_screen(FilePickerScreen())
 
 
@@ -490,21 +572,48 @@ class DirectoryPickerScreen(ModalScreen):
         self.dismiss(None)
 
 
-class FileItem(Static):
+class FileItem(Static, can_focus=True):
     """A clickable file item in the file picker."""
 
+    DEFAULT_CSS = """
+    FileItem {
+        height: 1;
+        padding: 0 1;
+    }
+    
+    FileItem:hover {
+        background: $primary-darken-2;
+    }
+    
+    FileItem:focus {
+        background: $primary-darken-1;
+    }
+    
+    FileItem.selected {
+        background: $primary;
+    }
+    """
+
     class Selected(Message):
-        """Message emitted when a file item is clicked."""
+        """Message emitted when a file item is selected."""
 
         def __init__(self, file_path: Path) -> None:
             super().__init__()
             self.file_path = file_path
+
+    BINDINGS = [
+        Binding("enter", "select", "Select", show=False),
+        Binding("space", "select", "Select", show=False),
+    ]
 
     def __init__(self, file_path: Path, display_text: str, **kwargs):
         super().__init__(display_text, **kwargs)
         self.file_path = file_path
 
     def on_click(self) -> None:
+        self.post_message(self.Selected(self.file_path))
+
+    def action_select(self) -> None:
         self.post_message(self.Selected(self.file_path))
 
 
@@ -531,19 +640,6 @@ class FilePickerScreen(ModalScreen):
         padding: 1;
     }
     
-    FilePickerScreen .file-item {
-        height: 1;
-        padding: 0 1;
-    }
-    
-    FilePickerScreen .file-item:hover {
-        background: $primary-darken-2;
-    }
-    
-    FilePickerScreen .file-item.selected {
-        background: $primary;
-    }
-    
     FilePickerScreen #picker-buttons {
         height: auto;
         align: center middle;
@@ -553,6 +649,7 @@ class FilePickerScreen(ModalScreen):
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
+        Binding("enter", "confirm", "Confirm", show=False),
     ]
 
     def __init__(self):
@@ -598,7 +695,6 @@ class FilePickerScreen(ModalScreen):
             item = FileItem(
                 f,
                 display_text,
-                classes="file-item",
                 id=f"file-{i}",
             )
             file_list.mount(item)
@@ -606,13 +702,20 @@ class FilePickerScreen(ModalScreen):
     @on(FileItem.Selected)
     def on_file_selected(self, event: FileItem.Selected) -> None:
         # Deselect all
-        for item in self.query(".file-item"):
+        for item in self.query(FileItem):
             item.remove_class("selected")
         # Select clicked - find the widget that sent this message
         sender = event._sender
         if isinstance(sender, FileItem):
             sender.add_class("selected")
         self.selected_file = event.file_path
+        # Immediately confirm selection
+        self.dismiss(self.selected_file)
+
+    def action_confirm(self) -> None:
+        """Confirm selection with Enter key."""
+        if self.selected_file:
+            self.dismiss(self.selected_file)
 
     @on(Button.Pressed, "#select-btn")
     def on_select(self) -> None:
@@ -628,6 +731,8 @@ class FilePickerScreen(ModalScreen):
 
 class RecordTranscribeTUI(App):
     """TUI for recording and transcribing audio with animations."""
+
+    ENABLE_COMMAND_PALETTE = True
 
     CSS = """
     Screen {
@@ -767,16 +872,21 @@ class RecordTranscribeTUI(App):
 
     def __init__(self):
         super().__init__()
+        # Load settings
+        self.settings = Settings.load()
+
+        # Apply saved theme
+        self.theme = self.settings.theme
+
+        # Override with environment variables if set
         self.recordings_dir = Path(
-            os.environ.get("RECORDINGS_DIR", Path.home() / "recordings")
+            os.environ.get("RECORDINGS_DIR", self.settings.recordings_dir)
         )
         self.transcripts_dir = Path(
-            os.environ.get(
-                "TRANSCRIPTS_DIR",
-                Path.home() / "projects/personal/notes/private/transcripts/raw",
-            )
+            os.environ.get("TRANSCRIPTS_DIR", self.settings.transcripts_dir)
         )
-        self.max_seconds = int(os.environ.get("MAX_SECONDS", 3000))
+        self.max_seconds = int(os.environ.get("MAX_SECONDS", self.settings.max_seconds))
+
         self.recording_process: subprocess.Popen | None = None
         self.current_recording: Path | None = None
         self.selected_audio_file: Path | None = None
@@ -798,19 +908,19 @@ class RecordTranscribeTUI(App):
                 yield Label("Model:")
                 yield Select(
                     [(s, s) for s in ["tiny", "small", "medium", "large-v3"]],
-                    value=os.environ.get("MODEL_SIZE", "medium"),
+                    value=os.environ.get("MODEL_SIZE", self.settings.model_size),
                     id="model-select",
                 )
                 yield Label("Language:")
                 yield Select(
                     [("Russian", "ru"), ("English", "en"), ("Auto", "auto")],
-                    value=os.environ.get("LANGUAGE", "ru"),
+                    value=os.environ.get("LANGUAGE", self.settings.language),
                     id="language-select",
                 )
                 yield Label("Device:")
                 yield Select(
                     [("CPU", "cpu"), ("CUDA", "cuda")],
-                    value=os.environ.get("DEVICE", "cpu"),
+                    value=os.environ.get("DEVICE", self.settings.device),
                     id="device-select",
                 )
             with Horizontal(id="buttons"):
@@ -1181,11 +1291,30 @@ class RecordTranscribeTUI(App):
             if selector_id == "recordings":
                 self.recordings_dir = path
                 self.query_one("#recordings-path", PathSelector).path = str(path)
+                self.settings.update(recordings_dir=str(path))
                 self.log_message(f"Recordings directory: {path}", "green")
             elif selector_id == "transcripts":
                 self.transcripts_dir = path
                 self.query_one("#transcripts-path", PathSelector).path = str(path)
+                self.settings.update(transcripts_dir=str(path))
                 self.log_message(f"Transcripts directory: {path}", "green")
+
+    @on(Select.Changed, "#model-select")
+    def on_model_changed(self, event: Select.Changed) -> None:
+        self.settings.update(model_size=str(event.value))
+
+    @on(Select.Changed, "#language-select")
+    def on_language_changed(self, event: Select.Changed) -> None:
+        self.settings.update(language=str(event.value))
+
+    @on(Select.Changed, "#device-select")
+    def on_device_changed(self, event: Select.Changed) -> None:
+        self.settings.update(device=str(event.value))
+
+    def watch_theme(self, theme: str) -> None:
+        """Save theme when it changes."""
+        if hasattr(self, "settings"):
+            self.settings.update(theme=theme)
 
     @on(Button.Pressed, "#record-btn")
     def handle_record_button(self) -> None:

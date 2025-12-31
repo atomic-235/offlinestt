@@ -64,7 +64,7 @@ echo "Starting transcription..."
 export OMP_NUM_THREADS=10
 uv run --project "$SCRIPT_DIR" python "$SCRIPT_DIR/$TRANSCRIBE_SCRIPT" "$output_wav" \
     -o "$TRANSCRIPTS_DIR/${current_datetime}.md" \
-    -m "${MODEL_SIZE:-small}" \
+    -m "${MODEL_SIZE:-medium}" \
     -l "${LANGUAGE:-ru}"
 
 echo "Transcription completed successfully!"

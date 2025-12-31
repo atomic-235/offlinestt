@@ -196,7 +196,7 @@ class RecordTranscribeTUI(App):
                 yield Label("Model:")
                 yield Select(
                     [(s, s) for s in ["tiny", "small", "medium", "large-v3"]],
-                    value=os.environ.get("MODEL_SIZE", "small"),
+                    value=os.environ.get("MODEL_SIZE", "medium"),
                     id="model-select",
                 )
                 yield Label("Language:")

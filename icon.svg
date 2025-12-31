@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="#1a1a2e"/>
+  
+  <!-- Microphone body -->
+  <rect x="52" y="28" width="24" height="40" rx="12" fill="#e94560"/>
+  
+  <!-- Microphone stand -->
+  <path d="M64 68 L64 88" stroke="#e94560" stroke-width="4" stroke-linecap="round"/>
+  <path d="M50 88 L78 88" stroke="#e94560" stroke-width="4" stroke-linecap="round"/>
+  
+  <!-- Microphone holder arc -->
+  <path d="M44 52 Q44 76 64 76 Q84 76 84 52" stroke="#e94560" stroke-width="4" fill="none" stroke-linecap="round"/>
+  
+  <!-- Sound waves (left) -->
+  <path d="M36 44 Q28 52 36 60" stroke="#0f3460" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <path d="M28 38 Q16 52 28 66" stroke="#0f3460" stroke-width="3" fill="none" stroke-linecap="round"/>
+  
+  <!-- Sound waves (right) -->
+  <path d="M92 44 Q100 52 92 60" stroke="#0f3460" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <path d="M100 38 Q112 52 100 66" stroke="#0f3460" stroke-width="3" fill="none" stroke-linecap="round"/>
+  
+  <!-- Text lines representing transcription -->
+  <rect x="38" y="96" width="20" height="3" rx="1.5" fill="#16213e"/>
+  <rect x="62" y="96" width="28" height="3" rx="1.5" fill="#16213e"/>
+  <rect x="44" y="102" width="40" height="3" rx="1.5" fill="#16213e"/>
+</svg>

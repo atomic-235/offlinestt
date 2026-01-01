@@ -28,8 +28,8 @@ from textual.widgets import (
     Header,
     Input,
     Label,
-    Log,
     ProgressBar,
+    RichLog,
     Select,
     Static,
 )
@@ -199,7 +199,7 @@ class SpinnerWidget(Static):
 
 
 class WaveformWidget(Static):
-    """Animated waveform visualization for recording."""
+    """Animated waveform visualization for recording using real audio levels."""
 
     DEFAULT_CSS = """
     WaveformWidget {
@@ -210,7 +210,6 @@ class WaveformWidget(Static):
     """
 
     active = reactive(False)
-    frame = reactive(0)
 
     BARS = [
         "\u2581",
@@ -222,23 +221,38 @@ class WaveformWidget(Static):
         "\u2587",
         "\u2588",
     ]
+    NUM_BARS = 20
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._anim_timer = None
-        self._pattern = [0] * 20
-        import random
-
-        self._random = random
+        self._pattern = [0] * self.NUM_BARS
+        self._audio_stream = None
+        self._current_level = 0.0
 
     def on_mount(self) -> None:
-        self._anim_timer = self.set_interval(0.1, self._tick, pause=True)
+        self._anim_timer = self.set_interval(0.05, self._tick, pause=True)
+
+    def _audio_callback(self, indata, frames, time_info, status) -> None:
+        """Callback for sounddevice to capture audio levels."""
+        import numpy as np
+
+        # Calculate RMS level
+        rms = np.sqrt(np.mean(indata**2))
+        # Convert to a 0-7 scale (log scale for better visualization)
+        if rms > 0:
+            # Use log scale, typical speech is around -20 to -10 dB
+            db = 20 * np.log10(rms + 1e-10)
+            # Map -60dB to 0dB range to 0-7
+            level = int(np.clip((db + 60) / 60 * 8, 0, 7))
+        else:
+            level = 0
+        self._current_level = level
 
     def _tick(self) -> None:
         if self.active:
-            # Shift pattern left and add new random value
-            self._pattern = self._pattern[1:] + [self._random.randint(0, 7)]
-            self.frame += 1
+            # Shift pattern left and add current audio level
+            self._pattern = self._pattern[1:] + [self._current_level]
             self._update_display()
 
     def _update_display(self) -> None:
@@ -246,8 +260,25 @@ class WaveformWidget(Static):
         self.update(bars)
 
     def start(self) -> None:
+        import sounddevice as sd
+
         self.active = True
-        self._pattern = [self._random.randint(0, 4) for _ in range(20)]
+        self._pattern = [0] * self.NUM_BARS
+        self._current_level = 0
+
+        # Start audio input stream for level monitoring
+        try:
+            self._audio_stream = sd.InputStream(
+                channels=1,
+                samplerate=16000,
+                blocksize=1600,  # 100ms blocks
+                callback=self._audio_callback,
+            )
+            self._audio_stream.start()
+        except Exception:
+            # Fallback: if audio capture fails, we'll just show zeros
+            pass
+
         if self._anim_timer:
             self._anim_timer.resume()
 
@@ -255,7 +286,18 @@ class WaveformWidget(Static):
         self.active = False
         if self._anim_timer:
             self._anim_timer.pause()
-        self.update("[dim]" + "\u2581" * 20 + "[/]")
+
+        # Stop audio stream
+        if self._audio_stream:
+            try:
+                self._audio_stream.stop()
+                self._audio_stream.close()
+            except Exception:
+                pass
+            self._audio_stream = None
+
+        self._pattern = [0] * self.NUM_BARS
+        self.update("[dim]" + "\u2581" * self.NUM_BARS + "[/]")
 
 
 class Timer(Static):
@@ -816,7 +858,7 @@ class RecordTranscribeTUI(App):
         padding: 1 2;
     }
 
-    Log {
+    RichLog {
         background: $surface;
         border: solid $primary;
     }
@@ -930,7 +972,7 @@ class RecordTranscribeTUI(App):
         with Container(id="progress-bar-container"):
             yield ProgressBar(id="progress-bar", show_eta=False)
         with Container(id="log-container"):
-            yield Log(id="log", highlight=True, auto_scroll=True)
+            yield RichLog(id="log", highlight=True, auto_scroll=True, markup=True)
         with Container(id="paths-container"):
             yield FileSelector(id="file-selector")
             yield PathSelector(
@@ -963,12 +1005,12 @@ class RecordTranscribeTUI(App):
         self.log_message(f"Max recording duration: {self.max_seconds}s")
 
     def log_message(self, message: str, style: str = "") -> None:
-        log = self.query_one("#log", Log)
+        log = self.query_one("#log", RichLog)
         timestamp = datetime.now().strftime("%H:%M:%S")
         if style:
-            log.write_line(f"[{style}][{timestamp}] {message}[/]")
+            log.write(f"[{style}][{timestamp}] {message}[/]")
         else:
-            log.write_line(f"[dim][{timestamp}][/] {message}")
+            log.write(f"[dim][{timestamp}][/] {message}")
 
     @property
     def is_recording(self) -> bool:
@@ -1329,7 +1371,7 @@ class RecordTranscribeTUI(App):
         self.action_pick_file()
 
     def action_clear_log(self) -> None:
-        self.query_one("#log", Log).clear()
+        self.query_one("#log", RichLog).clear()
 
     def action_request_quit(self) -> None:
         if self.is_recording:

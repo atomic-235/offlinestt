@@ -2,6 +2,7 @@
 """TUI for recording and transcribing audio using Textual with animations."""
 
 import asyncio
+import gc
 import json
 import os
 import signal
@@ -1167,6 +1168,15 @@ class RecordTranscribeTUI(App):
             self.log_message("Recording failed or was cancelled", "red")
             self.query_one("#status-indicator", StatusIndicator).status = "error"
 
+    def _unload_model(self) -> None:
+        """Unload the Whisper model to free memory."""
+        if self._model is not None:
+            self.log_message("Unloading model to free memory...", "dim")
+            del self._model
+            self._model = None
+            self._model_size = None
+            gc.collect()
+
     def start_transcription(self, audio_file: Path) -> None:
         self.log_message(f"Starting transcription: {audio_file.name}", "cyan")
         self.query_one("#spinner", SpinnerWidget).start()
@@ -1314,16 +1324,21 @@ class RecordTranscribeTUI(App):
                 status_indicator.status = "done"
                 spinner.stop()
 
+                # Unload model to free memory
+                self._unload_model()
+
         except asyncio.CancelledError:
             self.log_message("Transcription cancelled", "yellow")
             status_indicator.status = "cancelled"
             spinner.stop()
             progress_widget.reset()
+            self._unload_model()
         except Exception as e:
             self.log_message(f"Transcription error: {e}", "red")
             status_indicator.status = "error"
             spinner.stop()
             progress_widget.reset()
+            self._unload_model()
 
     def on_directory_picker_screen_dismiss(self, result) -> None:
         if result:

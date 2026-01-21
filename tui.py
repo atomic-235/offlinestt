@@ -51,6 +51,8 @@ class Settings:
     device: str = "cpu"
     theme: str = "textual-dark"
     max_seconds: int = 3000
+    backend: str = "local"  # "local" or "api"
+    api_model: str = "nvidia/parakeet-tdt-0.6b-v3"
 
     def __post_init__(self):
         # Set defaults for paths if not provided
@@ -257,7 +259,7 @@ class WaveformWidget(Static):
             self._update_display()
 
     def _update_display(self) -> None:
-        bars = "".join(f"[bold red]{self.BARS[v]}[/]" for v in self._pattern)
+        bars = "".join(f"[bold red]{self.BARS[int(v)]}[/]" for v in self._pattern)
         self.update(bars)
 
     def start(self) -> None:
@@ -845,6 +847,28 @@ class RecordTranscribeTUI(App):
         margin-right: 2;
     }
 
+    #api-settings {
+        layout: horizontal;
+        height: auto;
+        margin-bottom: 1;
+        display: none;
+    }
+
+    #api-settings.visible {
+        display: block;
+    }
+
+    #api-settings Label {
+        width: auto;
+        margin-right: 1;
+        padding-top: 1;
+    }
+
+    #api-settings Select {
+        width: 35;
+        margin-right: 2;
+    }
+
     #buttons {
         layout: horizontal;
         height: auto;
@@ -948,6 +972,12 @@ class RecordTranscribeTUI(App):
             yield TranscriptionProgress(id="transcription-progress")
         with Container(id="controls"):
             with Horizontal(id="settings"):
+                yield Label("Backend:")
+                yield Select(
+                    [("Local", "local"), ("API", "api")],
+                    value=self.settings.backend,
+                    id="backend-select",
+                )
                 yield Label("Model:")
                 yield Select(
                     [(s, s) for s in ["tiny", "small", "medium", "large-v3"]],
@@ -965,6 +995,17 @@ class RecordTranscribeTUI(App):
                     [("CPU", "cpu"), ("CUDA", "cuda")],
                     value=os.environ.get("DEVICE", self.settings.device),
                     id="device-select",
+                )
+            with Horizontal(id="api-settings"):
+                yield Label("API Model:")
+                yield Select(
+                    [
+                        ("Parakeet TDT 0.6B", "nvidia/parakeet-tdt-0.6b-v3"),
+                        ("Whisper Large v3", "openai/whisper-large-v3"),
+                        ("Whisper Large v3 Turbo", "openai/whisper-large-v3-turbo"),
+                    ],
+                    value=self.settings.api_model,
+                    id="api-model-select",
                 )
             with Horizontal(id="buttons"):
                 yield Button("Record", id="record-btn", variant="primary")
@@ -1000,10 +1041,15 @@ class RecordTranscribeTUI(App):
             self.transcripts_dir
         )
 
+        # Show/hide API settings based on saved backend
+        if self.settings.backend == "api":
+            self.query_one("#api-settings", Horizontal).add_class("visible")
+
         self.log_message(
             "Ready. Press 'r' to record, 't' to transcribe, 'f' to pick a file"
         )
         self.log_message(f"Max recording duration: {self.max_seconds}s")
+        self.log_message(f"Backend: {self.settings.backend}")
 
     def log_message(self, message: str, style: str = "") -> None:
         log = self.query_one("#log", RichLog)
@@ -1181,13 +1227,21 @@ class RecordTranscribeTUI(App):
         self.log_message(f"Starting transcription: {audio_file.name}", "cyan")
         self.query_one("#spinner", SpinnerWidget).start()
 
-        model_size = str(self.query_one("#model-select", Select).value)
-        language = str(self.query_one("#language-select", Select).value)
-        device = str(self.query_one("#device-select", Select).value)
+        backend = str(self.query_one("#backend-select", Select).value)
 
-        self.transcribe_task = asyncio.create_task(
-            self.run_transcription(audio_file, model_size, language, device)
-        )
+        if backend == "api":
+            api_model = str(self.query_one("#api-model-select", Select).value)
+            language = str(self.query_one("#language-select", Select).value)
+            self.transcribe_task = asyncio.create_task(
+                self.run_api_transcription(audio_file, api_model, language)
+            )
+        else:
+            model_size = str(self.query_one("#model-select", Select).value)
+            language = str(self.query_one("#language-select", Select).value)
+            device = str(self.query_one("#device-select", Select).value)
+            self.transcribe_task = asyncio.create_task(
+                self.run_transcription(audio_file, model_size, language, device)
+            )
 
     async def run_transcription(
         self, audio_file: Path, model_size: str, language: str, device: str
@@ -1324,21 +1378,180 @@ class RecordTranscribeTUI(App):
                 status_indicator.status = "done"
                 spinner.stop()
 
-                # Unload model to free memory
-                self._unload_model()
+                # Quit the app after transcription completes
+                self.exit()
 
         except asyncio.CancelledError:
             self.log_message("Transcription cancelled", "yellow")
             status_indicator.status = "cancelled"
             spinner.stop()
             progress_widget.reset()
-            self._unload_model()
+            self.exit()
         except Exception as e:
             self.log_message(f"Transcription error: {e}", "red")
             status_indicator.status = "error"
             spinner.stop()
             progress_widget.reset()
-            self._unload_model()
+            self.exit()
+
+    async def run_api_transcription(
+        self, audio_file: Path, api_model: str, language: str
+    ) -> None:
+        """Run transcription using OpenAI-compatible API."""
+        import httpx
+
+        start_time = time.time()
+        status_indicator = self.query_one("#status-indicator", StatusIndicator)
+        progress_widget = self.query_one(
+            "#transcription-progress", TranscriptionProgress
+        )
+        spinner = self.query_one("#spinner", SpinnerWidget)
+
+        try:
+            # Get API configuration from environment
+            base_url = os.environ.get("OPENAI_BASE_URL")
+            api_key = os.environ.get("OPENAI_API_KEY")
+
+            if not base_url or not api_key:
+                self.log_message(
+                    "Error: OPENAI_BASE_URL and OPENAI_API_KEY must be set", "red"
+                )
+                status_indicator.status = "error"
+                spinner.stop()
+                return
+
+            # Convert audio if needed
+            status_indicator.status = "converting"
+            self.log_message("Converting audio to compatible format...")
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_wav = Path(temp_dir) / "converted.wav"
+
+                # Run ffmpeg conversion in a thread
+                process = await asyncio.create_subprocess_exec(
+                    "ffmpeg",
+                    "-i",
+                    str(audio_file),
+                    "-ar",
+                    "16000",
+                    "-ac",
+                    "1",
+                    "-c:a",
+                    "pcm_s16le",
+                    str(temp_wav),
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await process.wait()
+
+                if process.returncode != 0:
+                    self.log_message("Audio conversion failed", "red")
+                    status_indicator.status = "error"
+                    spinner.stop()
+                    return
+
+                self.log_message("Audio converted successfully", "green")
+
+                # Send to API
+                status_indicator.status = "transcribing"
+                self.log_message(f"Sending to API: {api_model}...")
+
+                base_url = base_url.rstrip("/")
+                url = f"{base_url}/audio/transcriptions"
+
+                # Prepare request data
+                data = {
+                    "model": api_model,
+                    "response_format": "json",
+                    "timestamps": "false",
+                }
+                if language != "auto":
+                    data["language"] = language
+
+                # Send request in a thread to not block
+                async def send_request():
+                    with open(temp_wav, "rb") as f:
+                        files = {
+                            "file": (temp_wav.name, f, "audio/wav"),
+                        }
+                        headers = {
+                            "Authorization": f"Bearer {api_key}",
+                        }
+                        async with httpx.AsyncClient(timeout=300.0) as client:
+                            return await client.post(
+                                url, files=files, data=data, headers=headers
+                            )
+
+                response = await send_request()
+
+                if response.status_code != 200:
+                    self.log_message(
+                        f"API error ({response.status_code}): {response.text}", "red"
+                    )
+                    status_indicator.status = "error"
+                    spinner.stop()
+                    return
+
+                result = response.json()
+                text = result.get("text", "")
+                duration = result.get("duration", 0)
+
+                if not text:
+                    self.log_message("No text returned from API", "yellow")
+                    status_indicator.status = "error"
+                    spinner.stop()
+                    return
+
+                # Save transcription
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+                output_path = self.transcripts_dir / f"{timestamp}.md"
+
+                with open(output_path, "w") as md_file:
+                    md_file.write("# Transcription Results\n\n")
+                    md_file.write(f"**Audio File:** {audio_file.name}\n\n")
+                    md_file.write(f"**Model:** {api_model}\n\n")
+                    md_file.write(f"**Backend:** API\n\n")
+                    if duration:
+                        md_file.write(f"**Duration:** {duration:.2f}s\n\n")
+                    md_file.write("---\n\n")
+                    md_file.write(text)
+                    md_file.write("\n")
+
+                # Update progress
+                total_chars = len(text)
+                elapsed = time.time() - start_time
+                speed = total_chars / elapsed if elapsed > 0 else 0
+                progress_widget.update_progress(1, total_chars, speed, text[:60])
+
+                # Final stats
+                self.log_message(
+                    f"Transcription complete: {total_chars:,} chars in {elapsed:.1f}s",
+                    "bold green",
+                )
+                self.log_message(f"Output saved to: {output_path.name}", "green")
+
+                status_indicator.status = "done"
+                spinner.stop()
+
+                # Quit the app after transcription completes
+                self.exit()
+
+        except asyncio.CancelledError:
+            self.log_message("Transcription cancelled", "yellow")
+            status_indicator.status = "cancelled"
+            spinner.stop()
+            progress_widget.reset()
+            self.exit()
+        except Exception as e:
+            self.log_message(f"API transcription error: {e}", "red")
+            status_indicator.status = "error"
+            spinner.stop()
+            progress_widget.reset()
+            self.exit()
 
     def on_directory_picker_screen_dismiss(self, result) -> None:
         if result:
@@ -1367,6 +1580,22 @@ class RecordTranscribeTUI(App):
     @on(Select.Changed, "#device-select")
     def on_device_changed(self, event: Select.Changed) -> None:
         self.settings.update(device=str(event.value))
+
+    @on(Select.Changed, "#backend-select")
+    def on_backend_changed(self, event: Select.Changed) -> None:
+        backend = str(event.value)
+        self.settings.update(backend=backend)
+        api_settings = self.query_one("#api-settings", Horizontal)
+        if backend == "api":
+            api_settings.add_class("visible")
+            self.log_message("Using API backend for transcription", "cyan")
+        else:
+            api_settings.remove_class("visible")
+            self.log_message("Using local backend for transcription", "cyan")
+
+    @on(Select.Changed, "#api-model-select")
+    def on_api_model_changed(self, event: Select.Changed) -> None:
+        self.settings.update(api_model=str(event.value))
 
     def watch_theme(self, theme: str) -> None:
         """Save theme when it changes."""

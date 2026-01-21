@@ -11,4 +11,5 @@ dependencies = [
     "psutil>=6.1.0",
     "textual>=0.89.1",
     "sounddevice>=0.5.0",
+    "httpx>=0.28.0",
 ]

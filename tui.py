@@ -1172,10 +1172,15 @@ class RecordTranscribeTUI(App):
         """Unload the Whisper model to free memory."""
         if self._model is not None:
             self.log_message("Unloading model to free memory...", "dim")
-            del self._model
+            # Clear model reference
+            model = self._model
             self._model = None
             self._model_size = None
+            del model
+            # Force garbage collection multiple times to ensure cleanup
             gc.collect()
+            gc.collect()
+            self.log_message("Model unloaded", "dim")
 
     def start_transcription(self, audio_file: Path) -> None:
         self.log_message(f"Starting transcription: {audio_file.name}", "cyan")

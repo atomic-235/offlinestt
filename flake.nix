@@ -21,6 +21,10 @@
             python313
             uv
 
+            # Audio tools
+            sox
+            ffmpeg
+
             # System dependencies for audio/sounddevice
             portaudio
             libsndfile

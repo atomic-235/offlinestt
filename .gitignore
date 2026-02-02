@@ -24,6 +24,9 @@ wheels/
 venv/
 ENV/
 
+# Nix/direnv
+.direnv/
+
 # IDE
 .idea/
 .vscode/
